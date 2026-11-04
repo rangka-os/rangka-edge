@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -119,6 +120,10 @@ func (c *cli) usage(format string, a ...any) int {
 
 // open loads device.json and opens the queue. The caller closes the queue.
 func (c *cli) open() (string, device, *queue.Queue, error) {
+	return c.openWith(openQueue)
+}
+
+func (c *cli) openWith(opener func(string, device) (*queue.Queue, error)) (string, device, *queue.Queue, error) {
 	dir, err := dataDir(*c.dirFlag)
 	if err != nil {
 		return "", device{}, nil, err
@@ -127,7 +132,7 @@ func (c *cli) open() (string, device, *queue.Queue, error) {
 	if err != nil {
 		return dir, d, nil, err
 	}
-	q, err := openQueue(dir, d)
+	q, err := opener(dir, d)
 	return dir, d, q, err
 }
 
@@ -140,12 +145,20 @@ func (c *cli) register() func([]string) int {
 		if *kernel == "" || *code == "" {
 			return c.usage("--kernel and --code are required")
 		}
+		if err := checkKernelURL(*kernel); err != nil {
+			return c.usage("--kernel: %v", err)
+		}
 		dir, err := dataDir(*c.dirFlag)
 		if err != nil {
 			return c.fail("%v", err)
 		}
-		if _, err := os.Stat(devicePath(dir)); err == nil && !*force {
-			return c.fail("already registered (%s exists); use --force to replace it", devicePath(dir))
+		if _, err := os.Stat(devicePath(dir)); err == nil {
+			if !*force {
+				return c.fail("already registered (%s exists); use --force to replace it", devicePath(dir))
+			}
+			if err := checkNoPending(dir); err != nil {
+				return c.fail("%v", err)
+			}
 		}
 		devName := *name
 		if devName == "" {
@@ -166,6 +179,46 @@ func (c *cli) register() func([]string) int {
 		fmt.Fprintf(c.stdout, "registered %s (outlet %s, site %s)\n", d.DeviceID, d.Outlet, d.Site)
 		return 0
 	}
+}
+
+// checkKernelURL refuses a non-https kernel URL unless the host is loopback: the pairing code
+// and the device token must not cross a network in clear text.
+func checkKernelURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%q is not a valid URL", raw)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		h := u.Hostname()
+		if h == "localhost" {
+			return nil
+		}
+		if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("http is only allowed for localhost, 127.0.0.1 and ::1; use https")
+	}
+	return fmt.Errorf("scheme must be https")
+}
+
+// checkNoPending refuses to replace a registration while the old device still has unsent items.
+func checkNoPending(dir string) error {
+	d, err := loadDevice(dir)
+	if err != nil {
+		return nil // unreadable device.json: nothing to protect by identity, but check the queue below
+	}
+	q, err := openQueue(dir, d)
+	if err != nil {
+		return fmt.Errorf("cannot replace the registration: %w", err)
+	}
+	defer q.Close()
+	if n := q.Stats().Pending; n > 0 {
+		return fmt.Errorf("cannot replace the registration: %d items are still pending; run `rangka-edge flush` first", n)
+	}
+	return nil
 }
 
 func (c *cli) enqueue() func([]string) int {
@@ -201,12 +254,16 @@ func (c *cli) enqueue() func([]string) int {
 		if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
 			return c.fail("payload must be a JSON object")
 		}
-		_, _, q, err := c.open()
+		_, d, q, err := c.open()
 		if err != nil {
 			return c.fail("%v", err)
 		}
 		defer q.Close()
-		it, added, err := q.Enqueue(queue.NewItem{Key: *key, Kind: *kind, Actor: *actor, OccurredAt: at, Payload: raw})
+		k := *key
+		if k != "" && !strings.HasPrefix(k, d.DeviceID+":") {
+			k = d.DeviceID + ":" + k
+		}
+		it, added, err := q.Enqueue(queue.NewItem{Key: k, Kind: *kind, Actor: *actor, OccurredAt: at, Payload: raw})
 		if err != nil {
 			return c.fail("%v", err)
 		}
@@ -226,21 +283,21 @@ type deadJSON struct {
 }
 
 type statusOut struct {
-	DeviceID       string     `json:"device_id"`
-	Kernel         string     `json:"kernel"`
-	Outlet         string     `json:"outlet"`
-	Pending        int        `json:"pending"`
-	Dead           int        `json:"dead"`
-	Done           int        `json:"done"`
-	OldestPendingA string     `json:"oldest_pending_at,omitempty"`
-	LastSeq        int64      `json:"last_seq"`
-	DeadItems      []deadJSON `json:"dead_items"`
+	DeviceID        string     `json:"device_id"`
+	Kernel          string     `json:"kernel"`
+	Outlet          string     `json:"outlet"`
+	Pending         int        `json:"pending"`
+	Dead            int        `json:"dead"`
+	Done            int        `json:"done"`
+	OldestPendingAt string     `json:"oldest_pending_at,omitempty"`
+	LastSeq         int64      `json:"last_seq"`
+	DeadItems       []deadJSON `json:"dead_items"`
 }
 
 func (c *cli) status() func([]string) int {
 	asJSON := c.fs.Bool("json", false, "print one JSON object")
 	return func([]string) int {
-		_, d, q, err := c.open()
+		_, d, q, err := c.openWith(openQueueReadOnly)
 		if err != nil {
 			return c.fail("%v", err)
 		}
@@ -249,7 +306,7 @@ func (c *cli) status() func([]string) int {
 		out := statusOut{DeviceID: d.DeviceID, Kernel: d.Kernel, Outlet: d.Outlet, Pending: s.Pending, Dead: s.Dead,
 			Done: s.Done, LastSeq: s.LastSeq, DeadItems: []deadJSON{}}
 		if !s.OldestPendingAt.IsZero() {
-			out.OldestPendingA = s.OldestPendingAt.UTC().Format(time.RFC3339)
+			out.OldestPendingAt = s.OldestPendingAt.UTC().Format(time.RFC3339)
 		}
 		for _, it := range q.DeadItems() {
 			out.DeadItems = append(out.DeadItems, deadJSON{it.Key, it.Code, it.Message})
@@ -260,8 +317,8 @@ func (c *cli) status() func([]string) int {
 			return 0
 		}
 		oldest := "none"
-		if out.OldestPendingA != "" {
-			oldest = out.OldestPendingA
+		if out.OldestPendingAt != "" {
+			oldest = out.OldestPendingAt
 		}
 		fmt.Fprintf(c.stdout, "device:  %s\nkernel:  %s\noutlet:  %s\npending: %d\ndead:    %d\ndone:    %d\noldest pending: %s\nlast seq: %d\n",
 			out.DeviceID, out.Kernel, out.Outlet, out.Pending, out.Dead, out.Done, oldest, out.LastSeq)
