@@ -25,7 +25,7 @@ var (
 	ErrNotFound = errors.New("queue: item not found")
 )
 
-// MaxKeyLen is the longest idempotency key accepted.
+// MaxKeyLen is the longest idempotency key accepted, in bytes.
 const MaxKeyLen = 200
 
 // State is where an item is in its life.
@@ -90,6 +90,7 @@ type Queue struct {
 	entries  map[string]*entry
 	lastSeq  int64
 	closed   bool
+	failed   error // set when the log may hold an unapplied record; every mutation then fails
 }
 
 // Open opens (creating if needed) the queue in dir, replays the log and compacts it when worthwhile.
@@ -128,8 +129,9 @@ func (q *Queue) load() error {
 		return err
 	}
 	if q.shouldCompact(total) {
+		// Best effort: on failure keep the uncompacted log, it is still complete.
 		if err := q.compact(q.dir); err != nil {
-			return fmt.Errorf("queue: compaction: %w", err)
+			_ = os.Remove(filepath.Join(q.dir, tmpName))
 		}
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
@@ -218,13 +220,22 @@ func (q *Queue) append(r record) error {
 		return err
 	}
 	if _, err := q.log.Write(line); err != nil {
-		_ = os.Truncate(q.log.Name(), st.Size()) // drop a partial line; replay would do it anyway
-		return err
+		return q.rollback(st.Size(), err)
 	}
 	if err := syncFile(q.log); err != nil {
-		return err
+		return q.rollback(st.Size(), err)
 	}
 	return q.apply(r)
+}
+
+// rollback drops a line that was written but not made durable. If that is impossible the
+// log and memory may disagree, so the queue refuses further changes until it is reopened.
+func (q *Queue) rollback(size int64, cause error) error {
+	if terr := q.log.Truncate(size); terr != nil {
+		q.failed = fmt.Errorf("queue: log in unknown state after %v, reopen required: %w", cause, terr)
+		return q.failed
+	}
+	return cause
 }
 
 func payloadHash(p json.RawMessage) string {
@@ -247,7 +258,7 @@ func (q *Queue) errIfClosed() error {
 	if q.closed {
 		return errors.New("queue: closed")
 	}
-	return nil
+	return q.failed
 }
 
 // Enqueue appends a new item. A key that already exists with the same kind and payload

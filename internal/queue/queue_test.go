@@ -382,3 +382,125 @@ func TestOpenTwiceLocked(t *testing.T) {
 	q = openQ(t, dir)
 	q.Close()
 }
+
+func TestReplayAfterRestartWithHTMLChars(t *testing.T) {
+	dir := t.TempDir()
+	q := openQ(t, dir)
+	n := NewItem{Key: "k1", Kind: "sale", Payload: json.RawMessage(`{"name": "Kopi & Roti <1>"}`)}
+	first, _, err := q.Enqueue(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"name":"Kopi & Roti <1>"}`
+	if string(first.Payload) != want {
+		t.Fatalf("payload %s", first.Payload)
+	}
+	q.Close()
+	q = openQ(t, dir)
+	defer q.Close()
+	size := logSize(t, dir)
+	it, added, err := q.Enqueue(n)
+	if err != nil || added {
+		t.Fatalf("replay: added=%v err=%v", added, err)
+	}
+	if string(it.Payload) != want {
+		t.Fatalf("payload after reopen %s", it.Payload)
+	}
+	if got, _ := q.Get("k1"); string(got.Payload) != want {
+		t.Fatalf("Get payload %s", got.Payload)
+	}
+	if logSize(t, dir) != size {
+		t.Fatal("log grew")
+	}
+}
+
+func TestSyncFailureRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	q := openQ(t, dir)
+	orig := syncFile
+	defer func() { syncFile = orig }()
+	syncFile = func(*os.File) error { return errors.New("disk full") }
+	if _, _, err := q.Enqueue(newItem("sale", `{"n":1}`)); err == nil {
+		t.Fatal("enqueue must fail when fsync fails")
+	}
+	if logSize(t, dir) != 0 {
+		t.Fatal("failed line not rolled back")
+	}
+	syncFile = orig
+	it, _, err := q.Enqueue(newItem("sale", `{"n":1}`))
+	if err != nil || it.Seq != 1 {
+		t.Fatalf("next enqueue: %+v err=%v", it, err)
+	}
+	q.Close()
+	q = openQ(t, dir)
+	defer q.Close()
+	if st := q.Stats(); st.Pending != 1 || st.LastSeq != 1 {
+		t.Fatalf("stats: %+v", st)
+	}
+}
+
+// fillDone acks n items, then adds two pending ones, with fsync stubbed for speed.
+func fillDone(t *testing.T, dir string, n int) {
+	t.Helper()
+	orig := syncFile
+	syncFile = func(*os.File) error { return nil }
+	defer func() { syncFile = orig }()
+	q := openQ(t, dir)
+	for i := 1; i <= n; i++ {
+		k := fmt.Sprintf("sale-%04d", i)
+		mustEnqueue(t, q, NewItem{Key: k, Kind: "sale", Payload: json.RawMessage(`{}`)})
+		if err := q.Ack(k, "r"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustEnqueue(t, q, newItem("sale", `{"p":1}`))
+	q.Close()
+}
+
+func TestCompactionNotRepeated(t *testing.T) {
+	dir := t.TempDir()
+	fillDone(t, dir, 1500)
+	q := openQ(t, dir) // compacts
+	q.Close()
+	path := filepath.Join(dir, "queue.log")
+	before, _ := os.Stat(path)
+	renames := 0
+	orig := renameFile
+	renameFile = func(a, b string) error { renames++; return orig(a, b) }
+	defer func() { renameFile = orig }()
+	q = openQ(t, dir)
+	defer q.Close()
+	after, _ := os.Stat(path)
+	if renames != 0 || after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("second Open rewrote the log (renames=%d)", renames)
+	}
+	if st := q.Stats(); st.Done != 1500 || st.Pending != 1 {
+		t.Fatalf("stats: %+v", st)
+	}
+}
+
+func TestCompactionFailureIsBestEffort(t *testing.T) {
+	dir := t.TempDir()
+	fillDone(t, dir, 1500)
+	before := logSize(t, dir)
+	orig := renameFile
+	renameFile = func(string, string) error { return errors.New("rename failed") }
+	defer func() { renameFile = orig }()
+	q, err := Open(dir, Options{DeviceID: "dev_ab", Now: testClock()})
+	if err != nil {
+		t.Fatalf("Open must succeed: %v", err)
+	}
+	defer q.Close()
+	if st := q.Stats(); st.Done != 1500 || st.Pending != 1 {
+		t.Fatalf("stats: %+v", st)
+	}
+	if logSize(t, dir) != before {
+		t.Fatal("log changed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "queue.log.tmp")); !os.IsNotExist(err) {
+		t.Fatalf("tmp left behind: %v", err)
+	}
+	if _, _, err := q.Enqueue(newItem("sale", `{"p":2}`)); err != nil {
+		t.Fatal(err)
+	}
+}
