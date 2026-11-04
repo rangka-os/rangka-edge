@@ -15,6 +15,9 @@ import (
 // syncFile is a variable so tests can skip fsync when they write thousands of records.
 var syncFile = func(f *os.File) error { return f.Sync() }
 
+// renameFile is a variable so tests can make compaction fail.
+var renameFile = os.Rename
+
 const (
 	opPut  = "put"
 	opAck  = "ack"
@@ -27,8 +30,8 @@ const (
 	// A line is "<crc32 hex, 8 chars> <json>\n"; the CRC covers the JSON bytes.
 	crcLen = 8
 
-	compactMinDone = 1000
-	doneRetention  = 400 * 24 * time.Hour
+	compactMinRemovable = 1000
+	doneRetention       = 400 * 24 * time.Hour
 )
 
 // record is one line of the log.
@@ -46,10 +49,14 @@ type record struct {
 }
 
 func encodeRecord(r record) ([]byte, error) {
-	body, err := json.Marshal(r)
-	if err != nil {
+	// HTML escaping is off so a payload comes back byte-identical (it is hashed for idempotency).
+	var enc bytes.Buffer
+	e := json.NewEncoder(&enc)
+	e.SetEscapeHTML(false)
+	if err := e.Encode(r); err != nil {
 		return nil, err
 	}
+	body := bytes.TrimSuffix(enc.Bytes(), []byte("\n"))
 	line := make([]byte, 0, crcLen+1+len(body)+1)
 	line = fmt.Appendf(line, "%08x ", crc32.ChecksumIEEE(body))
 	line = append(line, body...)
@@ -139,17 +146,24 @@ func (q *Queue) replay(path string) (int, error) {
 	return count, nil
 }
 
-// shouldCompact reports whether done records are at least compactMinDone and
-// more than half of all records.
+// shouldCompact reports whether the log is worth rewriting: done records are more than
+// half of all records and compaction would remove at least compactMinRemovable of them.
+// Counting removable records keeps an already compacted log from being rewritten on every Open.
 func (q *Queue) shouldCompact(totalRecords int) bool {
-	done, doneRecords := 0, 0
+	doneRecords, removable := 0, 0
+	cutoff := q.now().Add(-doneRetention)
 	for _, e := range q.entries {
-		if e.item.State == StateDone {
-			done++
-			doneRecords += e.records
+		if e.item.State != StateDone {
+			continue
+		}
+		doneRecords += e.records
+		if e.at.Before(cutoff) && e.item.Seq != q.lastSeq {
+			removable += e.records
+		} else {
+			removable += e.records - 1 // put+ack collapse into one done record
 		}
 	}
-	return done >= compactMinDone && doneRecords*2 > totalRecords
+	return removable >= compactMinRemovable && doneRecords*2 > totalRecords
 }
 
 // compact rewrites the log with pending and dead items in full and done items as
@@ -208,7 +222,7 @@ func (q *Queue) compact(dir string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, filepath.Join(dir, logName)); err != nil {
+	if err := renameFile(tmp, filepath.Join(dir, logName)); err != nil {
 		return err
 	}
 	q.entries = kept
