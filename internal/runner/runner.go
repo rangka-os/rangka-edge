@@ -97,6 +97,10 @@ func (r *Runner) Flush(ctx context.Context) (Report, error) {
 			if err != nil {
 				return rep, err
 			}
+			delete(keys, res.Key)
+		}
+		if len(keys) > 0 {
+			return rep, fmt.Errorf("%w: kernel left %d of %d events unanswered", edgesync.ErrUnknownOutcome, len(keys), len(items))
 		}
 	}
 }

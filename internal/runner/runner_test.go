@@ -129,6 +129,18 @@ func TestFlushUnknownKeyIsError(t *testing.T) {
 	}
 }
 
+func TestFlushMissingResultsIsUnknownOutcome(t *testing.T) {
+	e := setup(t)
+	e.enqueue(t, "sale.recorded", "sale.voided")
+	r := &runner.Runner{Queue: e.q, Pusher: fakePusher{}}
+	if _, err := r.Flush(context.Background()); !errors.Is(err, edgesync.ErrUnknownOutcome) {
+		t.Fatalf("got %v", err)
+	}
+	if e.q.Stats().Pending != 2 {
+		t.Error("items must stay pending")
+	}
+}
+
 func TestRunBacksOffThenRecovers(t *testing.T) {
 	e := setup(t)
 	e.enqueue(t, "sale.recorded")
@@ -199,8 +211,14 @@ func TestBackoffDelay(t *testing.T) {
 	if got := b.Delay(0, 30*time.Second); got != 30*time.Second {
 		t.Errorf("retry-after: %v", got)
 	}
-	if got := b.Delay(10, 10*time.Minute); got != 5*time.Minute {
-		t.Errorf("cap: %v", got)
+	if got := b.Delay(10, 10*time.Minute); got != 10*time.Minute {
+		t.Errorf("retry-after above cap: %v", got)
+	}
+	if got := b.Delay(0, 2*time.Hour); got != time.Hour {
+		t.Errorf("retry-after limit: %v", got)
+	}
+	if got := (runner.Backoff{Rand: func() float64 { return 0 }}).Delay(0, 30*time.Second); got != 30*time.Second {
+		t.Errorf("jitter must not undercut retry-after: %v", got)
 	}
 	hi := runner.Backoff{Rand: func() float64 { return 1 }}
 	if got := hi.Delay(0, 0); got != 1200*time.Millisecond {
