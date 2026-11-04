@@ -4,9 +4,9 @@
 receipt printers, barcode scanners, cash drawers, scales and RFID readers. It keeps working when the internet is down,
 and syncs with the Rangka kernel when the connection comes back.
 
-> **Status: scaffold (November 2026).** Nothing runs yet except `rangka-edge version`. The design is in
+> **Status: first cut (November 2026).** The durable queue, `edge-sync/v1` push and the CLI work end to end
+> against a stub kernel. There are no device connectors and no POS yet. The design is in
 > [rangka-os/docs/contracts/0003-edge-and-devices.md](https://github.com/rangka-os/rangka-os/blob/main/docs/contracts/0003-edge-and-devices.md).
-> Work starts with POS.
 
 Part of the Rangka family: [rangka-os](https://github.com/rangka-os/rangka-os) (kernel) ·
 [rangka-apps](https://github.com/rangka-os/rangka-apps) · [rangka-connectors](https://github.com/rangka-os/rangka-connectors) ·
@@ -31,14 +31,32 @@ movement in a warehouse, or check-in at a clinic.
 
 | Path | What |
 | --- | --- |
-| `cmd/rangka-edge` | The binary: `register`, `run`, `devices`, `status`, `version` |
+| `cmd/rangka-edge` | The binary: `register`, `enqueue`, `status`, `flush`, `run`, `dev-kernel`, `devices`, `version` |
 | `internal/transport` | Generic hardware transports (USB HID, serial, Bluetooth, network) |
-| `internal/runner` | Runs device connectors: device reads → triggers, actions → device |
+| `internal/runner` | Pushes the queue to the kernel with backoff (device connectors come later) |
 | `internal/queue` | Durable local queue with idempotency keys |
-| `internal/sync` | The `edge-sync` protocol with the kernel |
+| `internal/edgesync` | The `edge-sync/v1` client and types, plus `kernelstub`, a fake kernel for tests |
 
 Shared types (the `.rk` reader, connector schema, CEL) come from `github.com/rangka-os/rangka-os/kernel/pkg/...` at a
 pinned `rangka-os` release. They are moved out of `kernel/internal` as the first step of 0003.
+
+## Commands
+
+A local walkthrough with the stub kernel (use any data dir with `--dir`, or set `RANGKA_EDGE_DIR`):
+
+```bash
+rangka-edge dev-kernel --code ABCD2345 &                       # stub kernel on 127.0.0.1:8787
+rangka-edge register --kernel http://127.0.0.1:8787 --code ABCD2345
+rangka-edge enqueue --kind sale.recorded --key s-1 --payload '{"total":25000}'
+rangka-edge status                                             # pending 1
+rangka-edge flush                                              # pushed 1, duplicates 0, rejected 0
+```
+
+`rangka-edge run` keeps pushing until SIGINT or SIGTERM. `status --json` prints one JSON object for scripts.
+
+The queue is an append-only `queue.log` in `<dir>/queue/`: one CRC-checked JSON record per line, fsync per write.
+A torn last line (power cut) is truncated on open. The protocol types live in `internal/edgesync` until rangka-os
+ships `kernel/pkg/edgesync` at a tagged release.
 
 ## Build
 
