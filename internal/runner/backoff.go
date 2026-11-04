@@ -14,7 +14,7 @@ type Backoff struct {
 }
 
 // Delay returns how long to wait before retry number attempt (0 is the first retry). The delay doubles
-// from Min, is raised to retryAfter when the kernel asked for more, is capped at Max, then jittered.
+// from Min, is capped at Max and jittered, then raised to retryAfter (at most 1 h) when the kernel asked for more.
 func (b Backoff) Delay(attempt int, retryAfter time.Duration) time.Duration {
 	lo, hi, jitter, rnd := b.Min, b.Max, b.Jitter, b.Rand
 	if lo <= 0 {
@@ -33,10 +33,10 @@ func (b Backoff) Delay(attempt int, retryAfter time.Duration) time.Duration {
 	for i := 0; i < attempt && d < hi; i++ {
 		d *= 2
 	}
-	d = max(d, retryAfter)
 	d = min(d, hi)
 	if jitter > 0 {
 		d = time.Duration(float64(d) * (1 + jitter*(2*rnd()-1)))
 	}
-	return d
+	// The kernel's Retry-After is a floor that neither the cap nor jitter may undercut (at most 1 h).
+	return max(d, min(retryAfter, time.Hour))
 }
