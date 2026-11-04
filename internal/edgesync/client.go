@@ -15,10 +15,17 @@ import (
 	"time"
 )
 
+// ErrUnknownOutcome means the request may have reached the kernel but the answer is unusable (cut short,
+// not JSON, wrong result count or keys). Keys are idempotent, so the same events are safe to send again.
+var ErrUnknownOutcome = errors.New("edgesync: unknown outcome")
+
 // Retryable reports whether err means "outcome unknown, try the same events again".
 func Retryable(err error) bool {
 	if err == nil || errors.Is(err, ErrRevoked) || errors.Is(err, context.Canceled) {
 		return false
+	}
+	if errors.Is(err, ErrUnknownOutcome) {
+		return true
 	}
 	var he *HTTPError
 	if errors.As(err, &he) {
@@ -50,11 +57,11 @@ func (c *Client) Push(ctx context.Context, events []Event) ([]Result, error) {
 		return nil, err
 	}
 	if len(out.Results) != len(events) {
-		return nil, fmt.Errorf("edgesync: kernel answered %d results for %d events", len(out.Results), len(events))
+		return nil, fmt.Errorf("%w: kernel answered %d results for %d events", ErrUnknownOutcome, len(out.Results), len(events))
 	}
 	for i, r := range out.Results {
 		if r.Key != events[i].Key {
-			return nil, fmt.Errorf("edgesync: result %d has key %q, want %q", i, r.Key, events[i].Key)
+			return nil, fmt.Errorf("%w: result %d has key %q, want %q", ErrUnknownOutcome, i, r.Key, events[i].Key)
 		}
 	}
 	return out.Results, nil
@@ -85,7 +92,7 @@ func (c *Client) do(ctx context.Context, path string, in, out any) error {
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: reading response: %w", ErrUnknownOutcome, err)
 	}
 	if resp.StatusCode/100 != 2 {
 		he := &HTTPError{Status: resp.StatusCode}
@@ -102,7 +109,7 @@ func (c *Client) do(ctx context.Context, path string, in, out any) error {
 		return he
 	}
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("edgesync: bad kernel response: %w", err)
+		return fmt.Errorf("%w: bad kernel response: %w", ErrUnknownOutcome, err)
 	}
 	return nil
 }

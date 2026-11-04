@@ -116,3 +116,31 @@ func TestPushSendsVersionHeaderAndToken(t *testing.T) {
 		t.Fatal("mismatched result key must error")
 	}
 }
+
+func TestUnknownOutcomeIsRetryable(t *testing.T) {
+	cases := map[string]http.HandlerFunc{
+		"short body": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(200)
+			w.Write([]byte(`{"results":`))
+		},
+		"not json": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+			w.Write([]byte("not json"))
+		},
+		"fewer results": func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(edgesync.PushResponse{Results: []edgesync.Result{{Key: "a", Status: "accepted"}}})
+		},
+	}
+	for name, h := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(h)
+			defer srv.Close()
+			c := &edgesync.Client{BaseURL: srv.URL, Token: "t"}
+			_, err := c.Push(context.Background(), []edgesync.Event{{Key: "a"}, {Key: "b"}})
+			if !errors.Is(err, edgesync.ErrUnknownOutcome) || !edgesync.Retryable(err) {
+				t.Fatalf("want retryable unknown outcome, got %v", err)
+			}
+		})
+	}
+}
