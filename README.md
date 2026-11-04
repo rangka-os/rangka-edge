@@ -53,6 +53,7 @@ rangka-edge flush                                              # pushed 1, dupli
 ```
 
 `rangka-edge run` keeps pushing until SIGINT or SIGTERM. `status --json` prints one JSON object for scripts.
+`status` works while `run` is active; `enqueue` and `flush` are refused then ("queue is in use by another rangka-edge process (stop `rangka-edge run` first)").
 
 The queue is an append-only `queue.log` in `<dir>/queue/`: one CRC-checked JSON record per line, fsync per write.
 A torn last line (power cut) is truncated on open. The protocol types live in `internal/edgesync` until rangka-os

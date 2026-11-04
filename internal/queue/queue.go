@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,6 +24,10 @@ var (
 	ErrCorrupt = errors.New("queue: log is corrupt")
 	// ErrNotFound means no item has the key.
 	ErrNotFound = errors.New("queue: item not found")
+	// ErrReservedKey means an explicit key has the form of a generated key ("<DeviceID>:<12 digits>").
+	ErrReservedKey = errors.New("queue: key form is reserved for generated keys")
+	// ErrReadOnly means the queue was opened with OpenReadOnly.
+	ErrReadOnly = errors.New("queue: opened read-only")
 )
 
 // MaxKeyLen is the longest idempotency key accepted, in bytes.
@@ -90,6 +95,7 @@ type Queue struct {
 	entries  map[string]*entry
 	lastSeq  int64
 	closed   bool
+	readOnly bool
 	failed   error // set when the log may hold an unapplied record; every mutation then fails
 }
 
@@ -115,6 +121,20 @@ func Open(dir string, opt Options) (*Queue, error) {
 
 	if err := q.load(); err != nil {
 		lock.Close()
+		return nil, err
+	}
+	return q, nil
+}
+
+// OpenReadOnly replays the log without taking the directory lock, so it works while another
+// process holds the queue. It never truncates or compacts (a torn tail is ignored in memory),
+// and every mutating method returns ErrReadOnly. The view is a snapshot from the time of the call.
+func OpenReadOnly(dir string, opt Options) (*Queue, error) {
+	q := &Queue{deviceID: opt.DeviceID, now: opt.Now, dir: dir, entries: map[string]*entry{}, readOnly: true}
+	if q.now == nil {
+		q.now = time.Now
+	}
+	if _, err := q.replay(filepath.Join(dir, logName)); err != nil {
 		return nil, err
 	}
 	return q, nil
@@ -255,6 +275,9 @@ func compactJSON(p json.RawMessage) (json.RawMessage, error) {
 }
 
 func (q *Queue) errIfClosed() error {
+	if q.readOnly {
+		return ErrReadOnly
+	}
 	if q.closed {
 		return errors.New("queue: closed")
 	}
@@ -281,6 +304,9 @@ func (q *Queue) Enqueue(n NewItem) (it Item, added bool, err error) {
 		return Item{}, false, fmt.Errorf("queue: key longer than %d chars", MaxKeyLen)
 	}
 
+	if n.Key != "" && reservedKey(q.deviceID, n.Key) {
+		return Item{}, false, fmt.Errorf("%w: %s", ErrReservedKey, n.Key)
+	}
 	if n.Key != "" {
 		if e, ok := q.entries[n.Key]; ok {
 			if e.item.Kind != n.Kind || e.hash != payloadHash(payload) {
@@ -315,6 +341,20 @@ func (q *Queue) Enqueue(n NewItem) (it Item, added bool, err error) {
 		return Item{}, false, err
 	}
 	return q.entries[key].item, true, nil
+}
+
+// reservedKey reports whether key looks like a generated key for deviceID.
+func reservedKey(deviceID, key string) bool {
+	rest, ok := strings.CutPrefix(key, deviceID+":")
+	if !ok || len(rest) != 12 {
+		return false
+	}
+	for _, c := range rest {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (q *Queue) sorted(state State, limit int) []Item {
@@ -425,6 +465,9 @@ func (q *Queue) Close() error {
 		return nil
 	}
 	q.closed = true
+	if q.readOnly {
+		return nil
+	}
 	err := q.log.Close()
 	if lerr := q.lock.Close(); err == nil {
 		err = lerr

@@ -84,7 +84,7 @@ func decodeRecord(line []byte) (record, error) {
 	return r, nil
 }
 
-// replay reads the log into q. A bad tail (torn write) is truncated; a bad line
+// replay reads the log into q. A bad tail (torn write) is truncated (ignored when read-only); a bad line
 // followed by good lines is ErrCorrupt. It returns the number of valid records.
 func (q *Queue) replay(path string) (int, error) {
 	data, err := os.ReadFile(path)
@@ -138,7 +138,7 @@ func (q *Queue) replay(path string) (int, error) {
 		}
 		count++
 	}
-	if cut >= 0 {
+	if cut >= 0 && !q.readOnly {
 		if err := os.Truncate(path, int64(cut)); err != nil {
 			return 0, err
 		}

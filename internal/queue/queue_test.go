@@ -504,3 +504,70 @@ func TestCompactionFailureIsBestEffort(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOpenReadOnlyWhileLocked(t *testing.T) {
+	if !lockSupported {
+		t.Skip("no directory lock on this platform")
+	}
+	dir := t.TempDir()
+	q := openQ(t, dir)
+	defer q.Close()
+	mustEnqueue(t, q, newItem("sale.recorded", `{"a":1}`))
+	mustEnqueue(t, q, newItem("sale.recorded", `{"a":2}`))
+	if err := q.Ack("dev_ab:000000000001", "r1"); err != nil {
+		t.Fatal(err)
+	}
+	// A torn tail, as left by a power cut while the writer is mid-append.
+	f, err := os.OpenFile(filepath.Join(dir, "queue.log"), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("deadbeef {\"op\":\"pu")
+	f.Close()
+	before := logSize(t, dir)
+
+	if _, err := Open(dir, Options{DeviceID: "dev_ab"}); !errors.Is(err, ErrLocked) {
+		t.Fatalf("second Open: %v", err)
+	}
+	ro, err := OpenReadOnly(dir, Options{DeviceID: "dev_ab"})
+	if err != nil {
+		t.Fatalf("OpenReadOnly: %v", err)
+	}
+	defer ro.Close()
+	if got, want := ro.Stats(), q.Stats(); got != want {
+		t.Fatalf("stats %+v != %+v", got, want)
+	}
+	if _, _, err := ro.Enqueue(newItem("sale.recorded", `{}`)); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if err := ro.Ack("dev_ab:000000000002", "r"); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("Ack: %v", err)
+	}
+	if err := ro.Dead("dev_ab:000000000002", "c", "m"); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("Dead: %v", err)
+	}
+	if err := ro.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if after := logSize(t, dir); after != before {
+		t.Fatalf("log size changed %d -> %d", before, after)
+	}
+}
+
+func TestExplicitKeyReservedForm(t *testing.T) {
+	q := openQ(t, t.TempDir())
+	defer q.Close()
+	for _, k := range []string{"dev_ab:000000000007", "dev_ab:123456789012"} {
+		if _, _, err := q.Enqueue(NewItem{Key: k, Kind: "k", Payload: json.RawMessage(`{}`)}); !errors.Is(err, ErrReservedKey) {
+			t.Fatalf("%s: %v", k, err)
+		}
+	}
+	for _, k := range []string{"dev_ab:s-1", "dev_ab:00000000007", "dev_ab:0000000000070", "dev_cd:000000000007", "s-1"} {
+		if _, _, err := q.Enqueue(NewItem{Key: k, Kind: "k", Payload: json.RawMessage(`{}`)}); err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+	}
+	if it := mustEnqueue(t, q, newItem("k", `{}`)); !strings.HasSuffix(it.Key, ":000000000006") {
+		t.Fatalf("generated key %s", it.Key)
+	}
+}
