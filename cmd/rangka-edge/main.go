@@ -39,6 +39,10 @@ Usage:
   rangka-edge flush                 push the queue once
   rangka-edge run                   push the queue until stopped (SIGINT, SIGTERM)
   rangka-edge dev-kernel [--addr 127.0.0.1:8787] --code <code>   stub kernel for manual tests
+  rangka-edge print [--printer tcp://host:9100|file:/path] [--layout receipt|kitchen] [--cols 48|32]
+                    [--station <name>] [--outlet-name <name>] [--copy] [--drawer] [--job <id>] [--preview] <job.json|->
+                                    print a pos_sale as a receipt or kitchen ticket (ESC/POS)
+  rangka-edge printer-sim [--listen 127.0.0.1:9100] [--out <dir>] [--once]   network printer simulator
   rangka-edge devices               not implemented yet
   rangka-edge version
 
@@ -67,7 +71,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "devices":
 		fmt.Fprintln(stderr, "rangka-edge devices: not implemented yet")
 		return 1
-	case "register", "enqueue", "status", "flush", "run", "dev-kernel":
+	case "register", "enqueue", "status", "flush", "run", "dev-kernel", "print", "printer-sim":
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usageText)
 		return 2
@@ -91,6 +95,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		do = c.run()
 	case "dev-kernel":
 		do = c.devKernel()
+	case "print":
+		do = c.print()
+	case "printer-sim":
+		do = c.printerSim()
 	}
 	if err := fs.Parse(rest); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
