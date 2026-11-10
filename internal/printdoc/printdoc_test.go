@@ -25,7 +25,7 @@ func TestReceipt80mm(t *testing.T) {
 		"Tahu Contoh\n", "Jl. Contoh Dago No. 1\nBandung\n", "NPWP contoh-npwp\n", "Outlet Dago\n",
 		"Struk                        STRK-DGO-2611-00007\n",
 		"Tanggal                              11 Nov 2026\n",
-		"Tahu goreng original\n  2 x Rp 15.000                        Rp 30.000\n  tidak pedas\n",
+		"Tahu goreng original\n  2 x Rp 15.000                        Rp 30.000\nTahu isi sayur\n",
 		"  1,5 x Rp 20.000 (-10%)               Rp 27.000\n",
 		"Subtotal                               Rp 57.000\n", "Diskon nota                            -Rp 2.000\n",
 		"Total                                  Rp 55.000\n", "Tunai                                  Rp 40.000\n",
@@ -35,7 +35,7 @@ func TestReceipt80mm(t *testing.T) {
 			t.Errorf("receipt lacks %q\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "[LACI]") || strings.Contains(got, "Kembalian") || strings.Contains(got, "SALINAN") {
+	if strings.Contains(got, "[LACI]") || strings.Contains(got, "Kembalian") || strings.Contains(got, "SALINAN") || strings.Contains(got, "tidak pedas") {
 		t.Errorf("unexpected drawer, change or copy:\n%s", got)
 	}
 	for _, l := range strings.Split(got, "\n") {

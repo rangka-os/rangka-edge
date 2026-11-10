@@ -120,10 +120,7 @@ func Receipt(j Job, cols int) []byte {
 		if p := num(row["discount_pct"]); p != 0 {
 			left += " (-" + Number(p) + "%)"
 		}
-		b.Pair("  "+left, Rupiah(num(row["amount"])))
-		if n := str(row["note"]); n != "" {
-			b.Line("  " + n)
-		}
+		b.Pair("  "+left, Rupiah(num(row["amount"]))) // the note goes to the kitchen ticket, as in pos_receipt
 	}
 	b.Rule('-')
 	if v := num(d["discount_amount"]); v != 0 {

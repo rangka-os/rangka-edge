@@ -94,7 +94,7 @@ func (b *Builder) Line(text string) *Builder {
 }
 
 // Pair prints left and right on one line, right flush to the margin (an amount next to its label). When both do not
-// fit, left wraps and right goes on its own line, flush right.
+// fit, left wraps and right goes on its own line(s), flush right.
 func (b *Builder) Pair(left, right string) *Builder {
 	left, right = Clean(left), Clean(right)
 	w := b.Cols()
@@ -107,11 +107,11 @@ func (b *Builder) Pair(left, right string) *Builder {
 		b.buf.WriteString(l)
 		b.buf.WriteByte(lf)
 	}
-	if right != "" {
-		if len(right) > w {
-			right = right[:w]
+	for _, r := range Wrap(right, w) {
+		if r == "" {
+			continue
 		}
-		b.buf.WriteString(strings.Repeat(" ", w-len(right)) + right)
+		b.buf.WriteString(strings.Repeat(" ", w-len(r)) + r)
 		b.buf.WriteByte(lf)
 	}
 	return b

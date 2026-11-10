@@ -33,7 +33,8 @@ type printPayload struct {
 }
 
 // print lays out a record (receipt or kitchen ticket) as ESC/POS and sends it to a printer. On a registered device the
-// result is queued as print.done or print.failed, keyed <device>:print:<job>, so head office sees what was printed
+// result is queued as print.done or print.failed, keyed <device>:print:<job>:done|failed (a failed try and the
+// retry that printed are two events), so head office sees what was printed
 // once edge-sync reaches the kernel. Printing never waits for the network.
 func (c *cli) print() func([]string) int {
 	printer := c.fs.String("printer", os.Getenv("RANGKA_EDGE_PRINTER"), "tcp://host[:9100] or file:/path (default $RANGKA_EDGE_PRINTER)")
@@ -106,7 +107,7 @@ func (c *cli) print() func([]string) int {
 		if perr != nil {
 			kind, pl.Error = "print.failed", perr.Error()
 		}
-		c.queuePrint(kind, "print:"+id, pl, now)
+		c.queuePrint(kind, "print:"+id+":"+strings.TrimPrefix(kind, "print."), pl, now)
 		if perr != nil {
 			return c.fail("%v", perr)
 		}

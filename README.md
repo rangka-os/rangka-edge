@@ -72,7 +72,7 @@ rangka-edge print --preview sale.json                           # no printer: th
 A job file is the pos_sale record (bare, or the kernel's `{"record": ...}`), or `{"doc": record, "header": {name,
 address, phone, npwp, footer}, "outlet_name", "layout", "station", "copy", "drawer"}`. Text goes out as plain ASCII
 (accents folded), because printers differ in their default code page. On a registered Edge every print queues
-`print.done` or `print.failed` (key `<device>:print:<job>`, payload: record, layout, printer, bytes, error), so head
+`print.done` or `print.failed` (key `<device>:print:<job>:done|failed`, payload: record, layout, printer, bytes, error), so head
 office sees it once the kernel speaks edge-sync; `--job` makes a retry the same event. While `run` holds the queue the
 print still goes out and the event is not queued (a note on stderr): a long-running `serve` that owns both is next.
 

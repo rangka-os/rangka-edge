@@ -26,6 +26,14 @@ func TestPairFitsAndWraps(t *testing.T) {
 	}
 }
 
+func TestPairWrapsLongRight(t *testing.T) {
+	got := Decode(New(16).Pair("Pembeli", "Ibu Contoh Panjang Sekali").Bytes())
+	want := "Pembeli\n      Ibu Contoh\n  Panjang Sekali\n"
+	if got != want {
+		t.Fatalf("%q want %q", got, want)
+	}
+}
+
 func TestDoubleWidthHalvesColumns(t *testing.T) {
 	b := New(Cols80).Size(true, false)
 	if b.Cols() != 24 {

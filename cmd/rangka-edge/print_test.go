@@ -67,11 +67,20 @@ func TestCLIPrintQueuesEvents(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &s); err != nil || s.Pending != 2 {
 		t.Fatalf("status: %v %q", err, out)
 	}
-	// the same job id again is the same event: still two pending
+	// j2 printed on retry: its print.done is a new event next to the failure
+	if c, _, e := exec(t, saleJob, "print", "--dir", dir, "--printer", "file:"+paper, "--job", "j2", "-"); c != 0 || !strings.Contains(e, "queued print.done") {
+		t.Fatalf("retry: %d %q", c, e)
+	}
+	_, out, _ = exec(t, "", "status", "--dir", dir, "--json")
+	_ = json.Unmarshal([]byte(out), &s)
+	if s.Pending != 3 {
+		t.Fatalf("after retry: %q", out)
+	}
+	// the same job id again is the same event: still three pending
 	exec(t, saleJob, "print", "--dir", dir, "--printer", "file:"+paper, "--job", "j1", "-")
 	_, out, _ = exec(t, "", "status", "--dir", dir, "--json")
 	_ = json.Unmarshal([]byte(out), &s)
-	if s.Pending != 2 {
+	if s.Pending != 3 {
 		t.Fatalf("a repeated job id queued twice: %q", out)
 	}
 }
