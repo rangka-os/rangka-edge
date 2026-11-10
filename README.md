@@ -5,7 +5,9 @@ receipt printers, barcode scanners, cash drawers, scales and RFID readers. It ke
 and syncs with the Rangka kernel when the connection comes back.
 
 > **Status: first cut (November 2026).** The durable queue, `edge-sync/v1` push and the CLI work end to end
-> against a stub kernel. There are no device connectors and no POS yet. The design is in
+> against a stub kernel. Printing works without the kernel: `print` lays out a cashier receipt or a kitchen ticket as
+> ESC/POS and sends it to a network (raw TCP 9100) or USB/serial printer, and `printer-sim` stands in for a printer.
+> Device connectors (`via: device`) and printing driven by the kernel wait for edge-sync in the kernel. The design is in
 > [rangka-os/docs/contracts/0003-edge-and-devices.md](https://github.com/rangka-os/rangka-os/blob/main/docs/contracts/0003-edge-and-devices.md).
 
 Part of the Rangka family: [rangka-os](https://github.com/rangka-os/rangka-os) (kernel) ·
@@ -31,8 +33,10 @@ movement in a warehouse, or check-in at a clinic.
 
 | Path | What |
 | --- | --- |
-| `cmd/rangka-edge` | The binary: `register`, `enqueue`, `status`, `flush`, `run`, `dev-kernel`, `devices`, `version` |
-| `internal/transport` | Generic hardware transports (USB HID, serial, Bluetooth, network) |
+| `cmd/rangka-edge` | The binary: `register`, `enqueue`, `status`, `flush`, `run`, `dev-kernel`, `print`, `printer-sim`, `devices`, `version` |
+| `internal/escpos` | ESC/POS builder (80 mm = 48 columns, 58 mm = 32) and a decoder that shows a job as the paper reads |
+| `internal/printdoc` | Layouts: `receipt` (same order and words as module pos's `pos_receipt` print format) and `kitchen` (no prices, big item lines) |
+| `internal/transport` | Generic hardware transports; printers today: `tcp://host[:9100]` and `file:/dev/...` |
 | `internal/runner` | Pushes the queue to the kernel with backoff (device connectors come later) |
 | `internal/queue` | Durable local queue with idempotency keys |
 | `internal/edgesync` | The `edge-sync/v1` client and types, plus `kernelstub`, a fake kernel for tests |
@@ -54,6 +58,23 @@ rangka-edge flush                                              # pushed 1, dupli
 
 `rangka-edge run` keeps pushing until SIGINT or SIGTERM. `status --json` prints one JSON object for scripts.
 `status` works while `run` is active; `enqueue` and `flush` are refused then ("queue is in use by another rangka-edge process (stop `rangka-edge run` first)").
+
+### Printing
+
+```bash
+rangka-edge printer-sim --listen 127.0.0.1:9100 &              # shows each job as text
+curl -s -H "Authorization: Bearer $TOKEN" $KERNEL/api/v1/r/pos_sale/STRK-DGO-2611-00001 > sale.json
+rangka-edge print --printer tcp://127.0.0.1:9100 --outlet-name "Outlet Dago" --drawer sale.json
+rangka-edge print --printer tcp://127.0.0.1:9100 --layout kitchen --station Dapur sale.json
+rangka-edge print --preview sale.json                           # no printer: the text on stdout
+```
+
+A job file is the pos_sale record (bare, or the kernel's `{"record": ...}`), or `{"doc": record, "header": {name,
+address, phone, npwp, footer}, "outlet_name", "layout", "station", "copy", "drawer"}`. Text goes out as plain ASCII
+(accents folded), because printers differ in their default code page. On a registered Edge every print queues
+`print.done` or `print.failed` (key `<device>:print:<job>:done|failed`, payload: record, layout, printer, bytes, error), so head
+office sees it once the kernel speaks edge-sync; `--job` makes a retry the same event. While `run` holds the queue the
+print still goes out and the event is not queued (a note on stderr): a long-running `serve` that owns both is next.
 
 The queue is an append-only `queue.log` in `<dir>/queue/`: one CRC-checked JSON record per line, fsync per write.
 A torn last line (power cut) is truncated on open. The protocol types live in `internal/edgesync` until rangka-os
