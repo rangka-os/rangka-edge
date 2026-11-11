@@ -33,7 +33,8 @@ movement in a warehouse, or check-in at a clinic.
 
 | Path | What |
 | --- | --- |
-| `cmd/rangka-edge` | The binary: `register`, `enqueue`, `status`, `flush`, `run`, `dev-kernel`, `print`, `printer-sim`, `devices`, `version` |
+| `cmd/rangka-edge` | The binary: `register`, `enqueue`, `status`, `flush`, `run`, `serve`, `dev-kernel`, `print`, `printer-sim`, `devices`, `version` |
+| `internal/printsvc` | The local print endpoint of `serve`: durable spool, print worker, `/v1/print` with token and CORS |
 | `internal/escpos` | ESC/POS builder (80 mm = 48 columns, 58 mm = 32) and a decoder that shows a job as the paper reads |
 | `internal/printdoc` | Layouts: `receipt` (same order and words as module pos's `pos_receipt` print format) and `kitchen` (no prices, big item lines) |
 | `internal/transport` | Generic hardware transports; printers today: `tcp://host[:9100]` and `file:/dev/...` |
@@ -74,7 +75,32 @@ address, phone, npwp, footer}, "outlet_name", "layout", "station", "copy", "draw
 (accents folded), because printers differ in their default code page. On a registered Edge every print queues
 `print.done` or `print.failed` (key `<device>:print:<job>:done|failed`, payload: record, layout, printer, bytes, error), so head
 office sees it once the kernel speaks edge-sync; `--job` makes a retry the same event. While `run` holds the queue the
-print still goes out and the event is not queued (a note on stderr): a long-running `serve` that owns both is next.
+print still goes out and the event is not queued (a note on stderr); `serve` owns both.
+
+### Local print endpoint (`serve`)
+
+`rangka-edge serve` is the outlet's one long-running process (draft contract 0045 §1 in Juragan's proposals, for
+rangka-os): it holds the queue and pushes it like `run` when the device is registered, and takes print jobs from the
+cashier screen on the same device.
+
+```bash
+rangka-edge serve --printer kasir=tcp://192.168.1.50:9100 --printer dapur=tcp://192.168.1.51:9100 \
+  --route receipt=kasir --route kitchen=dapur --origin https://tahu-contoh.juragan.id
+curl -s -H "Authorization: Bearer $(cat "$RANGKA_EDGE_DIR/print-token")" -d @job.json http://127.0.0.1:9180/v1/print
+```
+
+- `POST /v1/print {job_id, model, name, layout, printer?, record, copy?, drawer?}`: `202 {state: queued}` once the job
+  is written to `<dir>/spool/queued/` (fsync, rename); a worker prints it on the printer of its layout (or the one it
+  names, or the only one). `job_id` is the screen's outbox key + layout: a resend answers with the job's state
+  (`200 done`, `202 queued`) and prints nothing. A failed try waits (2 s, 4 s, ... 64 s) without holding up the other
+  printer's jobs; after 5 tries the job moves to `spool/failed/`. Every try queues `print.done` or `print.failed`
+  (key `<device>:print:<job_id>:<try>:done|failed`) on a registered device.
+- `GET /v1/health` (printers, layouts, device) and `GET /v1/jobs/<job_id>` (state, tries, error).
+- Safety: loopback only (`--listen` refuses other addresses), `Authorization: Bearer <print-token>` (made on first
+  start in `<dir>/print-token`, mode 0600), and a browser `Origin` must be one of `--origin` (https, or http on
+  localhost); preflights answer CORS and Chrome's private network access. The printer map lives on the Edge
+  (`<dir>/printers.json` with `printers`, `layouts`, `origins`, `cols`, plus the flags), never in `.rk` files.
+- Open for Dede (0045): the screen talking to localhost versus the kernel relaying print jobs through edge-sync.
 
 The queue is an append-only `queue.log` in `<dir>/queue/`: one CRC-checked JSON record per line, fsync per write.
 A torn last line (power cut) is truncated on open. The protocol types live in `internal/edgesync` until rangka-os
