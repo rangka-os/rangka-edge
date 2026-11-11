@@ -75,7 +75,8 @@ func TestServePrints(t *testing.T) {
 	if st, err := os.Stat(filepath.Join(dir, "print-token")); err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("print token: %v %v", st, err)
 	}
-	body := fmt.Sprintf(`{"job_id": "ob-1:receipt", "layout": "receipt", "record": %s}`, strings.ReplaceAll(saleJob, "\n", ""))
+	// a paid receipt asking for the drawer: an unregistered device prints it with the drawer shut (audit R4)
+	body := fmt.Sprintf(`{"job_id": "ob-1:receipt", "layout": "receipt", "drawer": true, "record": %s}`, strings.ReplaceAll(saleJob, "\n", ""))
 	post := func() int {
 		r, _ := http.NewRequest("POST", "http://"+addr+"/v1/print", strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
@@ -95,6 +96,9 @@ func TestServePrints(t *testing.T) {
 	case b := <-jobs:
 		if !bytes.Contains(b, []byte("STRK-DGO-2611-00001")) {
 			t.Fatalf("paper: %q", b)
+		}
+		if bytes.Contains(b, []byte{0x1b, 'p', 0, 25, 250}) {
+			t.Fatalf("unregistered device opened the drawer: %q", b)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("nothing printed: %s", errb.String())

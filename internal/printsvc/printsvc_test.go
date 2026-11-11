@@ -279,6 +279,24 @@ func TestDrawer(t *testing.T) {
 	}
 }
 
+// audit sisa-1111 R4: with NoDrawer (serve on an unregistered device) a paid receipt prints with the drawer shut and
+// its event says so.
+func TestNoDrawer(t *testing.T) {
+	f := &fakePrinters{got: map[string][]string{}, down: map[string]bool{}}
+	s, evs := newSvc(t, t.TempDir(), f)
+	s.NoDrawer = true
+	if _, _, err := s.Submit(Request{JobID: "paid", Layout: "receipt", Drawer: true, Record: json.RawMessage(sale)}); err != nil {
+		t.Fatal(err)
+	}
+	drain(s)
+	if len(f.got["tcp://kasir"]) != 1 || strings.Contains(f.got["tcp://kasir"][0], "[LACI]") {
+		t.Fatalf("paper: %q", f.got["tcp://kasir"])
+	}
+	if len(*evs) != 1 || (*evs)[0].Payload["drawer"] != false {
+		t.Fatalf("events: %v", *evs)
+	}
+}
+
 // audit E4: a job found in both done/ and queued/ (a stop between the two writes) is not printed again.
 func TestDoneNotReprinted(t *testing.T) {
 	dir := t.TempDir()
