@@ -164,7 +164,8 @@ func Receipt(j Job, cols int) []byte {
 	}
 	b.Line(footer)
 	b.Feed(3).Cut()
-	if j.Drawer {
+	// the cash drawer opens only for a paid receipt printed the first time: never for a draft, a void or a copy
+	if j.Drawer && str(d["docstatus"]) == "1" && !j.Copy {
 		b.OpenDrawer()
 	}
 	return b.Bytes()
