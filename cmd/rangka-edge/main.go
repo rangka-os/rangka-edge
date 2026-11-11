@@ -43,6 +43,9 @@ Usage:
                     [--station <name>] [--outlet-name <name>] [--copy] [--drawer] [--job <id>] [--preview] <job.json|->
                                     print a pos_sale as a receipt or kitchen ticket (ESC/POS)
   rangka-edge printer-sim [--listen 127.0.0.1:9100] [--out <dir>] [--once]   network printer simulator
+  rangka-edge serve [--listen 127.0.0.1:9180] [--printer name=tcp://host:9100 ...] [--route receipt|kitchen=name ...]
+                    [--origin https://<site> ...] [--cols 48|32]
+                                    local print endpoint for the cashier screen, plus sync (contract 0045 draft)
   rangka-edge devices               not implemented yet
   rangka-edge version
 
@@ -71,7 +74,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "devices":
 		fmt.Fprintln(stderr, "rangka-edge devices: not implemented yet")
 		return 1
-	case "register", "enqueue", "status", "flush", "run", "dev-kernel", "print", "printer-sim":
+	case "register", "enqueue", "status", "flush", "run", "dev-kernel", "print", "printer-sim", "serve":
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usageText)
 		return 2
@@ -99,6 +102,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		do = c.print()
 	case "printer-sim":
 		do = c.printerSim()
+	case "serve":
+		do = c.serve()
 	}
 	if err := fs.Parse(rest); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
