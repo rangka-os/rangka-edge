@@ -100,6 +100,8 @@ curl -s -H "Authorization: Bearer $(cat "$RANGKA_EDGE_DIR/print-token")" -d @job
   means the bytes reached the printer's socket (raw 9100 has no acknowledgement), not that the paper came out.
 - The cash drawer opens only for a paid receipt (`docstatus` 1) that is not a copy, on its first try; the event's
   `drawer` says whether it opened.
+- An Edge that is not registered yet (before pairing) prints without events and never opens the cash drawer: nothing
+  would show the kernel who opened it.
 - `GET /v1/health` (printers, layouts, device) and `GET /v1/jobs/<job_id>` (state, tries, error).
 - Safety: loopback only (`--listen` refuses other addresses), `Authorization: Bearer <print-token>` (made on first
   start in `<dir>/print-token`, mode 0600), and a browser `Origin` must be exactly one of `--origin` (https, or http

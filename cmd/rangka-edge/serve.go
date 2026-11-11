@@ -30,7 +30,8 @@ func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 // serve is the outlet's one long-running process (draft contract 0045 §1): it owns the queue, pushes it to the kernel
 // like `run` when the device is registered, and takes print jobs from the cashier screen on the same device at
 // http://127.0.0.1:9180/v1/print. A job is spooled durably before the answer (202) and printed by a worker; each try
-// is queued as print.done or print.failed. An unregistered Edge (before pairing) still prints, without events.
+// is queued as print.done or print.failed. An unregistered Edge (before pairing) still prints, without events, and
+// never opens the cash drawer.
 // Printers and allowed origins come from <dir>/printers.json and the flags; the print token from <dir>/print-token
 // (made on first start, mode 0600), which the screen sends as Authorization: Bearer.
 func (c *cli) serve() func([]string) int {
@@ -93,7 +94,11 @@ func (c *cli) serve() func([]string) int {
 			}()
 			fmt.Fprintf(c.stderr, "device %s: syncing with %s\n", d.DeviceID, d.Kernel)
 		case errors.Is(err, errNotRegistered):
-			fmt.Fprintln(c.stderr, "device not registered: printing without print events or sync")
+			// audit sisa-1111 R4: the screen's record is not checked against the kernel, and an unregistered device leaves no
+			// print.done trail, so a job sent with the print token could open the drawer unseen; until it is paired the
+			// device prints receipts with the drawer shut
+			svc.NoDrawer = true
+			fmt.Fprintln(c.stderr, "device not registered: printing without print events, sync or cash drawer")
 		default:
 			return c.fail("%v", err)
 		}

@@ -105,12 +105,15 @@ type Event struct {
 type Service struct {
 	Dir    string // spool directory: queued/, done/, failed/
 	Config Config
-	Token  string                                       // the local print token
-	Events func(Event)                                  // optional: record print.done / print.failed
-	Open   func(addr string) (transport.Printer, error) // default transport.OpenPrinter
-	Logf   func(format string, a ...any)                // optional
-	Retry  func(attempt int) time.Duration              // wait before the next try; default 2s, 4s, 8s ...
-	Now    func() time.Time
+	Token  string      // the local print token
+	Events func(Event) // optional: record print.done / print.failed
+	// NoDrawer keeps the cash drawer shut for every job: serve sets it while the device is not registered, so a job
+	// nobody can trace (no print.done event reaches the kernel) prints its receipt but never opens the drawer.
+	NoDrawer bool
+	Open     func(addr string) (transport.Printer, error) // default transport.OpenPrinter
+	Logf     func(format string, a ...any)                // optional
+	Retry    func(attempt int) time.Duration              // wait before the next try; default 2s, 4s, 8s ...
+	Now      func() time.Time
 
 	mu   sync.Mutex
 	wake chan struct{}
@@ -236,7 +239,7 @@ func (s *Service) next(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
-	kick := DrawerKick(j)
+	kick := !s.NoDrawer && DrawerKick(j)
 	err := s.print(ctx, j)
 	j.Attempts++
 	now := s.now().UTC()
@@ -300,7 +303,7 @@ func (s *Service) print(ctx context.Context, j Job) error {
 	pj.Copy = pj.Copy || j.Copy
 	// the drawer opens on the first try only (a retry of a job that may have kicked it already does not), and printdoc
 	// opens it only for a paid receipt that is not a copy
-	pj.Drawer = (pj.Drawer || j.Drawer) && j.Attempts == 0 && j.Layout == "receipt"
+	pj.Drawer = !s.NoDrawer && (pj.Drawer || j.Drawer) && j.Attempts == 0 && j.Layout == "receipt"
 	if pj.PrintedAt == "" {
 		pj.PrintedAt = j.Received.Format(time.RFC3339)
 	}
