@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -182,10 +183,12 @@ func mergePrintFlags(cfg *printsvc.Config, printers, routes, origins []string, c
 		cfg.Layouts[l] = n
 	}
 	for _, o := range origins {
-		if !strings.HasPrefix(o, "https://") && !strings.HasPrefix(o, "http://localhost") && !strings.HasPrefix(o, "http://127.0.0.1") {
-			return fmt.Errorf("--origin %q: want https://<site> (http only for localhost)", o)
-		}
 		cfg.Origins = append(cfg.Origins, strings.TrimRight(o, "/"))
+	}
+	for _, o := range cfg.Origins {
+		if err := checkOrigin(o); err != nil {
+			return err
+		}
 	}
 	for l, n := range cfg.Layouts {
 		if _, ok := cfg.Printers[n]; !ok {
@@ -215,4 +218,22 @@ func printToken(dir string) (string, error) {
 		return "", err
 	}
 	return t, nil
+}
+
+// checkOrigin accepts https://<host>[:port], or http on exactly localhost, 127.0.0.1 or [::1], with nothing after the
+// host: a browser sends an Origin in that form, and a prefix match would let http://localhost.evil.example in.
+func checkOrigin(o string) error {
+	u, err := url.Parse(o)
+	if err != nil || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
+		return fmt.Errorf("origin %q: want https://<site>", o)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if h := u.Hostname(); h == "localhost" || h == "127.0.0.1" || h == "::1" {
+			return nil
+		}
+	}
+	return fmt.Errorf("origin %q: want https://<site> (http only for localhost)", o)
 }

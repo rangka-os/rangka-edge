@@ -95,10 +95,15 @@ curl -s -H "Authorization: Bearer $(cat "$RANGKA_EDGE_DIR/print-token")" -d @job
   (`200 done`, `202 queued`) and prints nothing. A failed try waits (2 s, 4 s, ... 64 s) without holding up the other
   printer's jobs; after 5 tries the job moves to `spool/failed/`. Every try queues `print.done` or `print.failed`
   (key `<device>:print:<job_id>:<try>:done|failed`) on a registered device.
+- A job that gave up is tried again when the screen sends the same `job_id` again (5 more tries). Printing is at
+  least once: a stop after the paper came out but before the job is marked done prints it again on restart. `done`
+  means the bytes reached the printer's socket (raw 9100 has no acknowledgement), not that the paper came out.
+- The cash drawer opens only for a paid receipt (`docstatus` 1) that is not a copy, on its first try; the event's
+  `drawer` says whether it opened.
 - `GET /v1/health` (printers, layouts, device) and `GET /v1/jobs/<job_id>` (state, tries, error).
 - Safety: loopback only (`--listen` refuses other addresses), `Authorization: Bearer <print-token>` (made on first
-  start in `<dir>/print-token`, mode 0600), and a browser `Origin` must be one of `--origin` (https, or http on
-  localhost); preflights answer CORS and Chrome's private network access. The printer map lives on the Edge
+  start in `<dir>/print-token`, mode 0600), and a browser `Origin` must be exactly one of `--origin` (https, or http
+  on localhost, 127.0.0.1 or [::1]); preflights answer CORS and Chrome's private network access. The printer map lives on the Edge
   (`<dir>/printers.json` with `printers`, `layouts`, `origins`, `cols`, plus the flags), never in `.rk` files.
 - Open for Dede (0045): the screen talking to localhost versus the kernel relaying print jobs through edge-sync.
 

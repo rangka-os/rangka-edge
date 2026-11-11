@@ -56,10 +56,19 @@ func TestReceiptDraftCopyDrawer58mm(t *testing.T) {
 	j, _ := ParseJob([]byte(`{"name":"DRAFT-1","docstatus":0,"items":[],"grand_total":12000,"change_amount":8000}`))
 	j.Copy, j.Drawer = true, true
 	got := escpos.Decode(Receipt(j, escpos.Cols58))
-	for _, want := range []string{"SALINAN\n", "DRAF, BELUM DIBAYAR\n", "Tunai                  Rp 12.000\n", "Kembalian               Rp 8.000\n", "[POTONG]\n[LACI]\n"} {
+	for _, want := range []string{"SALINAN\n", "DRAF, BELUM DIBAYAR\n", "Tunai                  Rp 12.000\n", "Kembalian               Rp 8.000\n", "[POTONG]\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lacks %q\n%s", want, got)
 		}
+	}
+	// the drawer opens only for a paid receipt that is not a copy
+	if strings.Contains(got, "[LACI]") {
+		t.Errorf("a draft copy kicked the drawer\n%s", got)
+	}
+	paid, _ := ParseJob([]byte(`{"name":"STRK-1","docstatus":1,"items":[],"grand_total":12000,"change_amount":8000}`))
+	paid.Drawer = true
+	if !strings.Contains(escpos.Decode(Receipt(paid, escpos.Cols58)), "[POTONG]\n[LACI]\n") {
+		t.Error("a paid receipt did not kick the drawer")
 	}
 }
 

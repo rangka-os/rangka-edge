@@ -25,8 +25,10 @@ func TestServeUsage(t *testing.T) {
 	if c, _, e := exec(t, "", "serve", "--dir", dir, "--listen", "127.0.0.1:0", "--printer", "kasir=tcp://127.0.0.1:1", "--route", "kitchen=dapur"); c != 2 || !strings.Contains(e, "dapur") {
 		t.Fatalf("route to a missing printer: %d %s", c, e)
 	}
-	if c, _, e := exec(t, "", "serve", "--dir", dir, "--listen", "127.0.0.1:0", "--printer", "kasir=tcp://127.0.0.1:1", "--origin", "http://evil.example"); c != 2 || !strings.Contains(e, "origin") {
-		t.Fatalf("http origin: %d %s", c, e)
+	for _, o := range []string{"http://evil.example", "http://localhost.evil.example", "https://site.example/path", "https://"} {
+		if c, _, e := exec(t, "", "serve", "--dir", dir, "--listen", "127.0.0.1:0", "--printer", "kasir=tcp://127.0.0.1:1", "--origin", o); c != 2 || !strings.Contains(e, "origin") {
+			t.Fatalf("origin %s: %d %s", o, c, e)
+		}
 	}
 }
 

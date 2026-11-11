@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -133,6 +134,16 @@ func TestRetryFailAndOtherPrinterNotHeld(t *testing.T) {
 	if failed != MaxAttempts {
 		t.Fatalf("one print.failed per try: %d %+v", failed, *evs)
 	}
+	// the screen sends it again after the printer is fixed: queued again and printed
+	f.down["tcp://dapur"] = false
+	j, added, err := s.Submit(req("k-1", "kitchen"))
+	if err != nil || added || j.State != "queued" {
+		t.Fatalf("resend of a failed job: %+v %v %v", j, added, err)
+	}
+	drain(s)
+	if j, _ := s.Lookup("k-1"); j.State != "done" || f.count("tcp://dapur") != 1 {
+		t.Fatalf("after resend: %+v %d", j, f.count("tcp://dapur"))
+	}
 }
 
 func TestSpoolSurvivesRestart(t *testing.T) {
@@ -224,5 +235,63 @@ func TestHTTPGate(t *testing.T) {
 	}
 	if f.count("tcp://kasir") != 1 {
 		t.Fatalf("printed %d times", f.count("tcp://kasir"))
+	}
+}
+
+// audit E1: the drawer opens for a paid receipt on its first try only, never for a draft, a copy or a retry, and the
+// event says whether it opened.
+func TestDrawer(t *testing.T) {
+	f := &fakePrinters{got: map[string][]string{}, down: map[string]bool{}}
+	s, evs := newSvc(t, t.TempDir(), f)
+	draft := strings.Replace(sale, `"docstatus": 1`, `"docstatus": 0`, 1)
+	for id, r := range map[string]Request{
+		"paid":  {JobID: "paid", Layout: "receipt", Drawer: true, Record: json.RawMessage(sale)},
+		"draft": {JobID: "draft", Layout: "receipt", Drawer: true, Record: json.RawMessage(draft)},
+		"copy":  {JobID: "copy", Layout: "receipt", Drawer: true, Copy: true, Record: json.RawMessage(sale)},
+	} {
+		if _, _, err := s.Submit(r); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+	drain(s)
+	kicks := 0
+	for _, p := range f.got["tcp://kasir"] {
+		kicks += strings.Count(p, "[LACI]")
+	}
+	if kicks != 1 {
+		t.Fatalf("drawer kicks %d, want 1 (paid only): %q", kicks, f.got["tcp://kasir"])
+	}
+	opened := map[string]bool{}
+	for _, e := range *evs {
+		opened[e.Payload["job_id"].(string)] = e.Payload["drawer"].(bool)
+	}
+	if !opened["paid"] || opened["draft"] || opened["copy"] {
+		t.Fatalf("drawer in events: %v", opened)
+	}
+	// a retry of a paid receipt does not kick again
+	f.down["tcp://kasir"] = true
+	s.Submit(Request{JobID: "paid-2", Layout: "receipt", Drawer: true, Record: json.RawMessage(sale)})
+	s.next(context.Background())
+	f.down["tcp://kasir"] = false
+	drain(s)
+	if p := f.got["tcp://kasir"][len(f.got["tcp://kasir"])-1]; strings.Contains(p, "[LACI]") {
+		t.Fatalf("retry kicked the drawer: %q", p)
+	}
+}
+
+// audit E4: a job found in both done/ and queued/ (a stop between the two writes) is not printed again.
+func TestDoneNotReprinted(t *testing.T) {
+	dir := t.TempDir()
+	f := &fakePrinters{got: map[string][]string{}, down: map[string]bool{}}
+	s, _ := newSvc(t, dir, f)
+	s.Submit(req("r-1", "receipt"))
+	drain(s)
+	j, _ := s.Lookup("r-1")
+	if err := writeJob(filepath.Join(dir, "queued", file("r-1")), j); err != nil {
+		t.Fatal(err)
+	}
+	drain(s)
+	if f.count("tcp://kasir") != 1 {
+		t.Fatalf("reprinted: %d", f.count("tcp://kasir"))
 	}
 }

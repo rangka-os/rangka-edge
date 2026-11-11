@@ -86,6 +86,7 @@ type Job struct {
 	Request
 	State    string    `json:"state"` // queued | done | failed
 	Attempts int       `json:"attempts"`
+	Limit    int       `json:"limit,omitempty"` // give up when Attempts reaches it (0: MaxAttempts)
 	Error    string    `json:"error,omitempty"`
 	Received time.Time `json:"received"`
 	Printed  time.Time `json:"printed,omitempty"`
@@ -183,17 +184,32 @@ func (s *Service) Submit(r Request) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if j, ok := s.Lookup(r.JobID); ok {
+		if j.State != "failed" {
+			return j, false, nil
+		}
+		// a job that gave up is tried again when the screen sends it again (the cashier pressed Cetak ulang after
+		// fixing the printer): MaxAttempts more tries, the drawer stays shut (it is not the first try)
+		j.State, j.Limit, j.Error = "queued", j.Attempts+MaxAttempts, ""
+		if err := writeJob(filepath.Join(s.Dir, "queued", file(r.JobID)), j); err != nil {
+			return Job{}, false, err
+		}
+		_ = os.Remove(filepath.Join(s.Dir, "failed", file(r.JobID)))
+		s.poke()
 		return j, false, nil
 	}
 	j := Job{Request: r, State: "queued", Received: s.now().UTC()}
 	if err := writeJob(filepath.Join(s.Dir, "queued", file(r.JobID)), j); err != nil {
 		return Job{}, false, err
 	}
+	s.poke()
+	return j, true, nil
+}
+
+func (s *Service) poke() {
 	select {
 	case s.wake <- struct{}{}:
 	default:
 	}
-	return j, true, nil
 }
 
 // Run prints spooled jobs until ctx ends; jobs left from before a restart are printed first, oldest first. It looks
@@ -220,6 +236,7 @@ func (s *Service) next(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
+	kick := DrawerKick(j)
 	err := s.print(ctx, j)
 	j.Attempts++
 	now := s.now().UTC()
@@ -231,7 +248,7 @@ func (s *Service) next(ctx context.Context) bool {
 	} else {
 		j.Error = ""
 	}
-	s.emit(j, kind, now)
+	s.emit(j, kind, now, kick)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
@@ -239,7 +256,7 @@ func (s *Service) next(ctx context.Context) bool {
 		j.State = "done"
 		s.move(path, "done", j)
 		s.logf("printed %s %s (%s)", j.Layout, j.Name, j.JobID)
-	case j.Attempts >= MaxAttempts:
+	case j.Attempts >= limit(j):
 		j.State = "failed"
 		s.move(path, "failed", j)
 		s.logf("gave up %s after %d tries: %v", j.JobID, j.Attempts, err)
@@ -250,11 +267,28 @@ func (s *Service) next(ctx context.Context) bool {
 	return true
 }
 
+func limit(j Job) int {
+	if j.Limit > 0 {
+		return j.Limit
+	}
+	return MaxAttempts
+}
+
 func (s *Service) retryWait(attempt int) time.Duration {
 	if s.Retry != nil {
 		return s.Retry(attempt)
 	}
 	return time.Duration(1<<min(attempt, 6)) * time.Second
+}
+
+// DrawerKick tells whether a try of j opens the cash drawer (first try, a paid receipt, not a copy).
+func DrawerKick(j Job) bool {
+	pj, err := printdoc.ParseJob(j.Record)
+	if err != nil {
+		return false
+	}
+	return (pj.Drawer || j.Drawer) && j.Attempts == 0 && j.Layout == "receipt" && !(pj.Copy || j.Copy) &&
+		fmt.Sprint(pj.Doc["docstatus"]) == "1"
 }
 
 func (s *Service) print(ctx context.Context, j Job) error {
@@ -264,7 +298,9 @@ func (s *Service) print(ctx context.Context, j Job) error {
 	}
 	pj.Layout = j.Layout
 	pj.Copy = pj.Copy || j.Copy
-	pj.Drawer = pj.Drawer || j.Drawer
+	// the drawer opens on the first try only (a retry of a job that may have kicked it already does not), and printdoc
+	// opens it only for a paid receipt that is not a copy
+	pj.Drawer = (pj.Drawer || j.Drawer) && j.Attempts == 0 && j.Layout == "receipt"
 	if pj.PrintedAt == "" {
 		pj.PrintedAt = j.Received.Format(time.RFC3339)
 	}
@@ -289,13 +325,13 @@ func (s *Service) print(ctx context.Context, j Job) error {
 	return p.Print(ctx, out)
 }
 
-func (s *Service) emit(j Job, kind string, at time.Time) {
+func (s *Service) emit(j Job, kind string, at time.Time, drawer bool) {
 	if s.Events == nil {
 		return
 	}
 	name, _, _ := s.Config.PrinterFor(j.Layout, j.Printer)
 	pl := map[string]any{"model": orDefault(j.Model, "pos_sale"), "doc": j.Name, "layout": j.Layout, "printer": name,
-		"job_id": j.JobID, "attempt": j.Attempts, "copy": j.Copy}
+		"job_id": j.JobID, "attempt": j.Attempts, "copy": j.Copy, "drawer": drawer}
 	if j.Error != "" {
 		pl["error"] = j.Error
 	}
@@ -325,6 +361,11 @@ func (s *Service) oldest() (string, Job, bool) {
 		j, err := readJob(p)
 		if err != nil {
 			s.logf("spool: skipping unreadable %s: %v", e.Name(), err)
+			continue
+		}
+		// a job already in done/ (the process stopped between writing done/ and removing queued/) is not printed again
+		if _, err := os.Stat(filepath.Join(s.Dir, "done", e.Name())); err == nil {
+			_ = os.Remove(p)
 			continue
 		}
 		// a job that failed waits before its next try (Printed holds the last try's time while queued); the jobs
