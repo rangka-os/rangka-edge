@@ -201,6 +201,14 @@ func (s *Stub) process(ev edgesync.Event) edgesync.Result {
 	if json.Compact(&buf, ev.Payload) != nil {
 		return rejected(ev.Key, "payload_invalid", "payload must be a JSON object")
 	}
+	ref := ""
+	if ev.Kind == edgesync.KindScreenWrite {
+		var sw edgesync.ScreenWrite
+		if json.Unmarshal(ev.Payload, &sw) != nil || sw.Validate() != nil {
+			return rejected(ev.Key, "payload_invalid", "screen.write needs model and a valid op")
+		}
+		ref = sw.Name // the document name, as the kernel answers it (contract 0058 §4)
+	}
 	sum := sha256.Sum256(append([]byte(ev.Kind+"\x00"), buf.Bytes()...))
 	if old, ok := s.byKey[ev.Key]; ok {
 		if old.sum == sum {
@@ -208,7 +216,10 @@ func (s *Stub) process(ev edgesync.Event) edgesync.Result {
 		}
 		return rejected(ev.Key, "key_conflict", "key already used with a different event")
 	}
-	st := &stored{ev: ev, sum: sum, ref: fmt.Sprintf("edge_event/%d", len(s.order)+1)}
+	if ref == "" {
+		ref = fmt.Sprintf("edge_event/%d", len(s.order)+1)
+	}
+	st := &stored{ev: ev, sum: sum, ref: ref}
 	s.byKey[ev.Key] = st
 	s.order = append(s.order, st)
 	return edgesync.Result{Key: ev.Key, Status: edgesync.StatusAccepted, Ref: st.ref}

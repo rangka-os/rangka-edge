@@ -52,7 +52,7 @@ A local walkthrough with the stub kernel (use any data dir with `--dir`, or set 
 ```bash
 rangka-edge dev-kernel --code ABCD2345 &                       # stub kernel on 127.0.0.1:8787
 rangka-edge register --kernel http://127.0.0.1:8787 --code ABCD2345
-rangka-edge enqueue --kind sale.recorded --key s-1 --payload '{"total":25000}'
+rangka-edge enqueue --kind screen.write --key s-1 --actor 12 --payload '{"model":"pos_sale","op":"create","submit":true,"name":"STRK-DGO-K1-2611-00001","body":{"total":25000}}'
 rangka-edge status                                             # pending 1
 rangka-edge flush                                              # pushed 1, duplicates 0, rejected 0
 ```

@@ -44,13 +44,13 @@ func TestCLIEndToEnd(t *testing.T) {
 		c, o, e := exec(t, "", append([]string{"enqueue", "--dir", dir}, args...)...)
 		return c, o + e
 	}
-	if c, o := enq("--kind", "sale.recorded", "--key", "s-1", "--payload", `{"total":25000}`); c != 0 || !strings.HasPrefix(o, "queued dev_") || !strings.HasSuffix(strings.TrimSpace(o), ":s-1") {
+	if c, o := enq("--kind", "print.done", "--key", "s-1", "--payload", `{"total":25000}`); c != 0 || !strings.HasPrefix(o, "queued dev_") || !strings.HasSuffix(strings.TrimSpace(o), ":s-1") {
 		t.Fatalf("enqueue 1: %d %q", c, o)
 	}
-	if c, o := enq("--kind", "sale.recorded", "--key", "s-1", "--payload", `{"total":25000}`); c != 0 || !strings.HasPrefix(o, "already queued dev_") || !strings.HasSuffix(strings.TrimSpace(o), ":s-1") {
+	if c, o := enq("--kind", "print.done", "--key", "s-1", "--payload", `{"total":25000}`); c != 0 || !strings.HasPrefix(o, "already queued dev_") || !strings.HasSuffix(strings.TrimSpace(o), ":s-1") {
 		t.Fatalf("enqueue 2: %d %q", c, o)
 	}
-	c, o := enq("--kind", "sale.recorded", "--payload", `{"total":1}`)
+	c, o := enq("--kind", "print.done", "--payload", `{"total":1}`)
 	if c != 0 || !strings.HasPrefix(o, "queued dev_") || !strings.HasSuffix(strings.TrimSpace(o), ":000000000002") {
 		t.Fatalf("enqueue 3: %d %q", c, o)
 	}
@@ -73,19 +73,19 @@ func TestCLIEndToEnd(t *testing.T) {
 	if c, _ := enq("--kind", "foo", "--payload", `{}`); c != 1 {
 		t.Fatalf("unknown kind exit %d", c)
 	}
-	if c, _ := enq("--kind", "sale.recorded", "--key", "s-1", "--payload", `{"total":9}`); c != 1 {
+	if c, _ := enq("--kind", "print.done", "--key", "s-1", "--payload", `{"total":9}`); c != 1 {
 		t.Fatalf("key conflict exit %d", c)
 	}
-	if c, _ := enq("--kind", "sale.recorded", "--payload", `[1]`); c != 1 {
+	if c, _ := enq("--kind", "print.done", "--payload", `[1]`); c != 1 {
 		t.Fatalf("non-object payload exit %d", c)
 	}
-	if c, o, _ := exec(t, `{"x":1}`, "enqueue", "--dir", dir, "--kind", "sale.recorded", "--payload", "-"); c != 0 || !strings.HasPrefix(o, "queued ") {
+	if c, o, _ := exec(t, `{"x":1}`, "enqueue", "--dir", dir, "--kind", "print.done", "--payload", "-"); c != 0 || !strings.HasPrefix(o, "queued ") {
 		t.Fatalf("stdin payload: %d %q", c, o)
 	}
 }
 
 func TestCLIEnqueueBeforeRegister(t *testing.T) {
-	c, _, e := exec(t, "", "enqueue", "--dir", t.TempDir(), "--kind", "sale.recorded", "--payload", "{}")
+	c, _, e := exec(t, "", "enqueue", "--dir", t.TempDir(), "--kind", "print.done", "--payload", "{}")
 	if c != 1 || !strings.Contains(e, "not registered") {
 		t.Fatalf("got %d %q", c, e)
 	}
@@ -127,7 +127,7 @@ func TestCLIStatusWhileQueueHeld(t *testing.T) {
 		t.Skip("no directory lock on windows")
 	}
 	dir, _ := registerStub(t)
-	if c, _, e := exec(t, "", "enqueue", "--dir", dir, "--kind", "sale.recorded", "--payload", `{"a":1}`); c != 0 {
+	if c, _, e := exec(t, "", "enqueue", "--dir", dir, "--kind", "print.done", "--payload", `{"a":1}`); c != 0 {
 		t.Fatalf("enqueue: %d %s", c, e)
 	}
 	d, err := loadDevice(dir)
@@ -144,7 +144,7 @@ func TestCLIStatusWhileQueueHeld(t *testing.T) {
 	if c != 0 || json.Unmarshal([]byte(so), &st) != nil || st.Pending != 1 {
 		t.Fatalf("status while held: %d %q %s", c, so, e)
 	}
-	c, _, e = exec(t, "", "enqueue", "--dir", dir, "--kind", "sale.recorded", "--payload", `{"a":2}`)
+	c, _, e = exec(t, "", "enqueue", "--dir", dir, "--kind", "print.done", "--payload", `{"a":2}`)
 	if c != 1 || !strings.Contains(e, "stop `rangka-edge run` first") {
 		t.Fatalf("enqueue while held: %d %s", c, e)
 	}
@@ -167,7 +167,7 @@ func TestCLIRegisterRefusesPlainHTTP(t *testing.T) {
 
 func TestCLIRegisterForceRefusedWithPending(t *testing.T) {
 	dir, srv := registerStub(t)
-	if c, _, e := exec(t, "", "enqueue", "--dir", dir, "--kind", "sale.recorded", "--payload", `{"a":1}`); c != 0 {
+	if c, _, e := exec(t, "", "enqueue", "--dir", dir, "--kind", "print.done", "--payload", `{"a":1}`); c != 0 {
 		t.Fatalf("enqueue: %d %s", c, e)
 	}
 	before, _ := loadDevice(dir)
