@@ -27,7 +27,7 @@ func TestClientRegisterAndPush(t *testing.T) {
 	}
 	c.Token = rr.Token
 	evs := []edgesync.Event{
-		{Key: "a", Kind: "sale.recorded", Seq: 1, OccurredAt: time.Now(), Payload: json.RawMessage(`{"x":1}`)},
+		{Key: "a", Kind: "print.done", Seq: 1, OccurredAt: time.Now(), Payload: json.RawMessage(`{"x":1}`)},
 		{Key: "b", Kind: "nope", Seq: 2, OccurredAt: time.Now(), Payload: json.RawMessage(`{}`)},
 	}
 	res, err := c.Push(context.Background(), evs)
@@ -108,7 +108,7 @@ func TestPushSendsVersionHeaderAndToken(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &edgesync.Client{BaseURL: srv.URL, Token: "rke_abc"}
-	_, err := c.Push(context.Background(), []edgesync.Event{{Key: "a", Kind: "sale.recorded"}})
+	_, err := c.Push(context.Background(), []edgesync.Event{{Key: "a", Kind: "print.done"}})
 	if gotV != "v1" || gotA != "Bearer rke_abc" || gotP != "/api/v1/edge/events" || gotCT != "application/json" {
 		t.Fatalf("%q %q %q %q", gotV, gotA, gotP, gotCT)
 	}
@@ -142,5 +142,72 @@ func TestUnknownOutcomeIsRetryable(t *testing.T) {
 				t.Fatalf("want retryable unknown outcome, got %v", err)
 			}
 		})
+	}
+}
+
+// Contract 0058 §4: a sale is a screen.write of pos_sale named by the device; the dropped v1 kinds are refused.
+func TestScreenWriteKinds(t *testing.T) {
+	stub := kernelstub.New()
+	stub.AddPairingCode("K7Q2M9XD", "OUT-02")
+	srv := httptest.NewServer(stub.Handler())
+	defer srv.Close()
+	c := &edgesync.Client{BaseURL: srv.URL}
+	rr, err := c.Register(context.Background(), "K7Q2M9XD", edgesync.DeviceInfo{Name: "Kasir 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Token = rr.Token
+	sale := edgesync.ScreenWrite{Screen: "kasir", Model: "pos_sale", Op: "create", Submit: true, Name: "STRK-BTR-K1-2611-00042",
+		Body: map[string]any{"total": 45000}}
+	raw, _ := json.Marshal(sale)
+	evs := []edgesync.Event{
+		{Key: "s1", Kind: edgesync.KindScreenWrite, Seq: 1, Actor: "12", OccurredAt: time.Now(), Payload: raw},
+		{Key: "s2", Kind: edgesync.KindScreenWrite, Seq: 2, Actor: "12", OccurredAt: time.Now(), Payload: json.RawMessage(`{"model":"pos_sale","op":"cancel"}`)},
+		{Key: "s3", Kind: "sale.recorded", Seq: 3, OccurredAt: time.Now(), Payload: json.RawMessage(`{"total":1}`)},
+	}
+	res, err := c.Push(context.Background(), evs)
+	if err != nil || len(res) != 3 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if res[0].Status != edgesync.StatusAccepted || res[0].Ref != sale.Name {
+		t.Fatalf("sale: %+v", res[0])
+	}
+	if res[1].Status != edgesync.StatusRejected || res[1].Code != "payload_invalid" {
+		t.Fatalf("cancel without name: %+v", res[1])
+	}
+	if res[2].Status != edgesync.StatusRejected || res[2].Code != "unknown_kind" {
+		t.Fatalf("dropped kind: %+v", res[2])
+	}
+	// a resend of the same sale is a duplicate with the same ref
+	res, err = c.Push(context.Background(), evs[:1])
+	if err != nil || res[0].Status != edgesync.StatusDuplicate || res[0].Ref != sale.Name {
+		t.Fatalf("resend: %+v %v", res, err)
+	}
+}
+
+func TestScreenWriteValidate(t *testing.T) {
+	ok := []edgesync.ScreenWrite{
+		{Model: "pos_sale", Op: "create", Body: map[string]any{}},
+		{Model: "pos_sale", Op: "create"}, // the kernel reads a missing body as {}
+		{Model: "pos_sale", Op: "submit", Name: "STRK-1", Draft: "k1"},
+		{Model: "pos_sale", Op: "cancel", Name: "STRK-1"},
+		{Model: "pos_shift", Op: "action", Name: "SESI-1", Action: "close"},
+	}
+	for _, w := range ok {
+		if err := w.Validate(); err != nil {
+			t.Errorf("%+v: %v", w, err)
+		}
+	}
+	bad := []edgesync.ScreenWrite{
+		{Op: "create", Body: map[string]any{}},
+		{Model: "pos_sale", Op: "submit", Name: "STRK-1"},
+		{Model: "pos_sale", Op: "cancel"},
+		{Model: "pos_sale", Op: "action", Name: "x"},
+		{Model: "pos_sale", Op: "update"},
+	}
+	for _, w := range bad {
+		if w.Validate() == nil {
+			t.Errorf("%+v: want an error", w)
+		}
 	}
 }

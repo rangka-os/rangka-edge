@@ -512,8 +512,8 @@ func TestOpenReadOnlyWhileLocked(t *testing.T) {
 	dir := t.TempDir()
 	q := openQ(t, dir)
 	defer q.Close()
-	mustEnqueue(t, q, newItem("sale.recorded", `{"a":1}`))
-	mustEnqueue(t, q, newItem("sale.recorded", `{"a":2}`))
+	mustEnqueue(t, q, newItem("print.done", `{"a":1}`))
+	mustEnqueue(t, q, newItem("print.done", `{"a":2}`))
 	if err := q.Ack("dev_ab:000000000001", "r1"); err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestOpenReadOnlyWhileLocked(t *testing.T) {
 	if got, want := ro.Stats(), q.Stats(); got != want {
 		t.Fatalf("stats %+v != %+v", got, want)
 	}
-	if _, _, err := ro.Enqueue(newItem("sale.recorded", `{}`)); !errors.Is(err, ErrReadOnly) {
+	if _, _, err := ro.Enqueue(newItem("print.done", `{}`)); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	if err := ro.Ack("dev_ab:000000000002", "r"); !errors.Is(err, ErrReadOnly) {

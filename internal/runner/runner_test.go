@@ -53,7 +53,7 @@ func (e *env) enqueue(t *testing.T, kinds ...string) {
 func TestFlushDrainsInBatches(t *testing.T) {
 	e := setup(t)
 	for i := 0; i < 250; i++ {
-		e.enqueue(t, "sale.recorded")
+		e.enqueue(t, "print.done")
 	}
 	r := &runner.Runner{Queue: e.q, Pusher: e.cl, BatchSize: 100}
 	rep, err := r.Flush(context.Background())
@@ -70,7 +70,7 @@ func TestFlushDrainsInBatches(t *testing.T) {
 
 func TestFlushAfterLostResponse(t *testing.T) {
 	e := setup(t)
-	e.enqueue(t, "sale.recorded", "sale.recorded", "sale.voided")
+	e.enqueue(t, "print.done", "print.done", "print.failed")
 	e.stub.DropResponseNext(1)
 	r := &runner.Runner{Queue: e.q, Pusher: e.cl}
 	if _, err := r.Flush(context.Background()); err == nil || !edgesync.Retryable(err) {
@@ -93,7 +93,7 @@ func TestFlushAfterLostResponse(t *testing.T) {
 
 func TestFlushRejectedGoesDead(t *testing.T) {
 	e := setup(t)
-	e.enqueue(t, "sale.recorded", "sale.voided", "foo")
+	e.enqueue(t, "print.done", "print.failed", "foo")
 	r := &runner.Runner{Queue: e.q, Pusher: e.cl}
 	rep, err := r.Flush(context.Background())
 	if err != nil || rep.Pushed != 2 || rep.Rejected != 1 {
@@ -119,7 +119,7 @@ func (f fakePusher) Push(context.Context, []edgesync.Event) ([]edgesync.Result, 
 
 func TestFlushUnknownKeyIsError(t *testing.T) {
 	e := setup(t)
-	e.enqueue(t, "sale.recorded")
+	e.enqueue(t, "print.done")
 	r := &runner.Runner{Queue: e.q, Pusher: fakePusher{[]edgesync.Result{{Key: "other", Status: edgesync.StatusAccepted}}}}
 	if _, err := r.Flush(context.Background()); err == nil {
 		t.Fatal("want error")
@@ -131,7 +131,7 @@ func TestFlushUnknownKeyIsError(t *testing.T) {
 
 func TestFlushMissingResultsIsUnknownOutcome(t *testing.T) {
 	e := setup(t)
-	e.enqueue(t, "sale.recorded", "sale.voided")
+	e.enqueue(t, "print.done", "print.failed")
 	r := &runner.Runner{Queue: e.q, Pusher: fakePusher{}}
 	if _, err := r.Flush(context.Background()); !errors.Is(err, edgesync.ErrUnknownOutcome) {
 		t.Fatalf("got %v", err)
@@ -143,7 +143,7 @@ func TestFlushMissingResultsIsUnknownOutcome(t *testing.T) {
 
 func TestRunBacksOffThenRecovers(t *testing.T) {
 	e := setup(t)
-	e.enqueue(t, "sale.recorded")
+	e.enqueue(t, "print.done")
 	e.stub.FailNext(3, 503)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -175,7 +175,7 @@ func TestRunBacksOffThenRecovers(t *testing.T) {
 
 func TestRunStopsOnRevoked(t *testing.T) {
 	e := setup(t)
-	e.enqueue(t, "sale.recorded")
+	e.enqueue(t, "print.done")
 	e.stub.Revoke(e.id)
 	r := &runner.Runner{Queue: e.q, Pusher: e.cl, Sleep: func(context.Context, time.Duration) error { t.Fatal("must not sleep"); return nil }}
 	if err := r.Run(context.Background()); !errors.Is(err, edgesync.ErrRevoked) {
@@ -188,7 +188,7 @@ func TestRunStopsOnRevoked(t *testing.T) {
 
 func TestRunReturnsNonRetryable(t *testing.T) {
 	e := setup(t)
-	e.enqueue(t, "sale.recorded")
+	e.enqueue(t, "print.done")
 	e.stub.FailNext(1, 400)
 	r := &runner.Runner{Queue: e.q, Pusher: e.cl, Sleep: func(context.Context, time.Duration) error { t.Fatal("must not sleep"); return nil }}
 	var he *edgesync.HTTPError

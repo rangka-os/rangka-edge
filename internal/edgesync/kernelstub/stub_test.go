@@ -78,7 +78,7 @@ func setup(t *testing.T) (*Stub, *httptest.Server, string) {
 
 func TestPushAcceptDuplicateConflict(t *testing.T) {
 	s, srv, tok := setup(t)
-	ev := edgesync.Event{Key: "k1", Kind: "sale.recorded", Seq: 1, Payload: json.RawMessage(`{"a": 1}`)}
+	ev := edgesync.Event{Key: "k1", Kind: "print.done", Seq: 1, Payload: json.RawMessage(`{"a": 1}`)}
 	_, r1 := pushEvents(t, srv, tok, ev)
 	if r1.Results[0].Status != "accepted" || r1.Results[0].Ref != "edge_event/1" {
 		t.Fatalf("%+v", r1)
@@ -96,8 +96,8 @@ func TestPushAcceptDuplicateConflict(t *testing.T) {
 		t.Fatalf("%+v", r3)
 	}
 	_, r4 := pushEvents(t, srv, tok, edgesync.Event{Key: "k2", Kind: "foo", Payload: json.RawMessage(`{}`)},
-		edgesync.Event{Key: "", Kind: "sale.recorded", Payload: json.RawMessage(`{}`)},
-		edgesync.Event{Key: "k3", Kind: "sale.recorded", Payload: json.RawMessage(`[1]`)})
+		edgesync.Event{Key: "", Kind: "print.done", Payload: json.RawMessage(`{}`)},
+		edgesync.Event{Key: "k3", Kind: "print.done", Payload: json.RawMessage(`[1]`)})
 	if r4.Results[0].Code != "unknown_kind" || r4.Results[1].Code != "payload_invalid" || r4.Results[2].Code != "payload_invalid" {
 		t.Fatalf("%+v", r4)
 	}
@@ -133,7 +133,7 @@ func TestRevokedToken401(t *testing.T) {
 
 func TestFailAndDrop(t *testing.T) {
 	s, srv, tok := setup(t)
-	ev := edgesync.Event{Key: "k1", Kind: "sale.recorded", Payload: json.RawMessage(`{}`)}
+	ev := edgesync.Event{Key: "k1", Kind: "print.done", Payload: json.RawMessage(`{}`)}
 	s.FailNext(1, 500)
 	resp, _ := post(t, srv, "/api/v1/edge/events", tok, true, edgesync.PushRequest{Events: []edgesync.Event{ev}})
 	if resp.StatusCode != 500 || len(s.Events()) != 0 {
