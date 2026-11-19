@@ -188,6 +188,7 @@ func TestScreenWriteKinds(t *testing.T) {
 func TestScreenWriteValidate(t *testing.T) {
 	ok := []edgesync.ScreenWrite{
 		{Model: "pos_sale", Op: "create", Body: map[string]any{}},
+		{Model: "pos_sale", Op: "create"}, // the kernel reads a missing body as {}
 		{Model: "pos_sale", Op: "submit", Name: "STRK-1", Draft: "k1"},
 		{Model: "pos_sale", Op: "cancel", Name: "STRK-1"},
 		{Model: "pos_shift", Op: "action", Name: "SESI-1", Action: "close"},
@@ -199,7 +200,6 @@ func TestScreenWriteValidate(t *testing.T) {
 	}
 	bad := []edgesync.ScreenWrite{
 		{Op: "create", Body: map[string]any{}},
-		{Model: "pos_sale", Op: "create"},
 		{Model: "pos_sale", Op: "submit", Name: "STRK-1"},
 		{Model: "pos_sale", Op: "cancel"},
 		{Model: "pos_sale", Op: "action", Name: "x"},

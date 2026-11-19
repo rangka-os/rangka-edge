@@ -36,7 +36,7 @@ var Kinds = []string{KindScreenWrite, KindPrintDone, KindPrintFailed, KindDevice
 var ScreenWriteOps = []string{"create", "submit", "cancel", "action"}
 
 // ScreenWrite is the payload of a screen.write event (contract 0058 §4):
-//   - create {screen, model, body, name?, submit?}: submit true creates and submits in one unit (a paid sale); name is
+//   - create {screen, model, body?, name?, submit?}: submit true creates and submits in one unit (a paid sale); name is
 //     the device name (STRK-{outlet}-{device}-{YY}{MM}-{#####}), taken at submit
 //   - submit {model, name, draft, body?}: draft is the key of an earlier create event of the same device
 //   - cancel {model, name}: name is the submitted document's device name
@@ -60,9 +60,7 @@ func (w ScreenWrite) Validate() error {
 	}
 	switch w.Op {
 	case "create":
-		if w.Body == nil {
-			return errors.New("screen.write create: body is required")
-		}
+		// a create without body is an empty record, as the kernel reads it
 	case "submit":
 		if w.Name == "" || w.Draft == "" {
 			return errors.New("screen.write submit: name and draft are required")
